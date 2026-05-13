@@ -1,0 +1,1308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cooking Fever - 60s Diner</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: 'Courier New', monospace;
+            background: linear-gradient(180deg, #2C1810 0%, #1a0f0a 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 {
+            color: #FF4444;
+            text-shadow: 3px 3px 0px #FFD700, 5px 5px 10px #000;
+            font-size: 42px;
+            letter-spacing: 3px;
+        }
+        #gameCanvas {
+            border: 8px solid #FFD700;
+            background: #fff;
+            cursor: pointer;
+            box-shadow: 0 0 30px rgba(255, 215, 0, 0.6);
+            border-radius: 10px;
+        }
+        #stats {
+            margin-top: 15px;
+            font-size: 22px;
+            font-weight: bold;
+            color: #FFD700;
+            background: #FF4444;
+            padding: 12px 25px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+            border: 3px solid #FFD700;
+        }
+        #instructions {
+            margin-top: 15px;
+            max-width: 650px;
+            text-align: center;
+            color: #FFD700;
+            background: rgba(255, 68, 68, 0.4);
+            padding: 18px;
+            border-radius: 12px;
+            border: 2px solid #FFD700;
+        }
+    </style>
+</head>
+<body>
+    <h1>🍔 60s DINER RUSH 🍹</h1>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div id="stats">Served: 0 / 5 | Angry: 0 / 3 | Combo: 0</div>
+    <div id="instructions">
+        <p><strong>How to Play:</strong> Click GRILL to cook burgers (3s) → Click SODA to make drinks (3s) → Click CUSTOMER to serve when ready!</p>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const statsDiv = document.getElementById('stats');
+
+        // Animation state
+        let animFrame = 0;
+        const particles = [];
+        let screenShake = 0;
+        let neonBlink = true;
+        let jukeboxRotation = 0;
+        let comboCounter = 0;
+        let lastServeTime = 0;
+        const comboWindow = 3000;
+
+        // Game State
+        const game = {
+            servedCount: 0,
+            angryCount: 0,
+            targetServed: 5,
+            maxAngry: 3,
+            gameOver: false,
+            won: false
+        };
+
+        // Cute pastel colors
+        const outfitColors = [
+            { head: '#FFD4E5', body: '#FF99CC', accent: '#FF69B4', blush: '#FFB3D9' }, // Soft pink
+            { head: '#D4F1F4', body: '#75E6DA', accent: '#189AB4', blush: '#A8E6CF' }, // Mint
+            { head: '#FFF4D4', body: '#FFE5A0', accent: '#FFD966', blush: '#FFEBB3' }, // Cream
+            { head: '#E5D4FF', body: '#C299FF', accent: '#9966FF', blush: '#D4B3FF' }, // Lavender
+            { head: '#FFE4CC', body: '#FFCC99', accent: '#FF9966', blush: '#FFD4B3' }  // Peach
+        ];
+
+        // Stations
+        const stations = {
+            grill: {
+                x: 100, y: 450, width: 130, height: 90,
+                color: '#FF6B6B',
+                accentColor: '#FFD93D',
+                label: 'GRILL',
+                cooking: false,
+                ready: false,
+                cookTime: 3000,
+                startTime: 0,
+                item: 'burger',
+                smokeParticles: [],
+                flipProgress: 0,
+                isFlipping: false,
+                dingAnimation: 0
+            },
+            drink: {
+                x: 280, y: 450, width: 130, height: 90,
+                color: '#6BCB77',
+                accentColor: '#FFD93D',
+                label: 'SODA',
+                cooking: false,
+                ready: false,
+                cookTime: 3000,
+                startTime: 0,
+                item: 'drink',
+                bubbles: [],
+                fillLevel: 0,
+                iceCubes: [],
+                dingAnimation: 0
+            },
+            counter: {
+                x: 480, y: 450, width: 220, height: 90,
+                color: '#E8E8E8',
+                accentColor: '#FFD93D',
+                label: 'COUNTER',
+                burger: 0,
+                drink: 0
+            }
+        };
+
+        class Particle {
+            constructor(x, y, type, text = '') {
+                this.x = x;
+                this.y = y;
+                this.type = type;
+                this.text = text;
+                this.life = 60;
+                this.vy = -2;
+                this.vx = (Math.random() - 0.5) * 2;
+                this.scale = 1;
+            }
+
+            update() {
+                this.y += this.vy;
+                this.x += this.vx;
+                this.life--;
+                if (this.type === 'money' || this.type === 'combo') {
+                    this.scale = 1 + (60 - this.life) / 30;
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.life / 60;
+                ctx.font = `bold ${28 * this.scale}px Arial`;
+                ctx.textAlign = 'center';
+                if (this.type === 'money') {
+                    ctx.fillStyle = '#FFD700';
+                    ctx.strokeStyle = '#FF8C00';
+                    ctx.lineWidth = 3;
+                    ctx.strokeText(this.text, this.x, this.y);
+                }
+                ctx.fillText(this.text, this.x, this.y);
+                ctx.restore();
+            }
+
+            isDead() {
+                return this.life <= 0;
+            }
+        }
+
+        let customers = [];
+        let nextCustomerId = 1;
+        let lastCustomerTime = 0;
+        const customerInterval = 5000;
+        const customerPatienceTime = 15000;
+
+        class Customer {
+            constructor(id) {
+                this.id = id;
+                this.x = 50 + ((id - 1) % 4) * 180;
+                this.y = 130;
+                this.width = 110;
+                this.height = 140;
+                this.order = { burger: 1, drink: 1 };
+                this.arrivalTime = Date.now();
+                this.patience = customerPatienceTime;
+                this.served = false;
+                this.bobOffset = 0;
+                this.bobSpeed = 0.08;
+                this.outfit = outfitColors[id % outfitColors.length];
+                this.emotion = 'happy';
+                this.sweatDrops = [];
+                this.steamParticles = [];
+                this.isJumping = false;
+                this.jumpOffset = 0;
+                this.blinkTimer = 0;
+                this.isBlinking = false;
+            }
+
+            getPatienceColor() {
+                const elapsed = Date.now() - this.arrivalTime;
+                const remaining = this.patience - elapsed;
+                const ratio = remaining / this.patience;
+
+                if (ratio > 0.6) return '#6BCB77';
+                if (ratio > 0.3) return '#FFB347';
+                return '#FF6B6B';
+            }
+
+            getEmotion() {
+                const elapsed = Date.now() - this.arrivalTime;
+                const remaining = this.patience - elapsed;
+                const ratio = remaining / this.patience;
+
+                if (ratio > 0.6) return 'happy';
+                if (ratio > 0.3) return 'impatient';
+                if (ratio > 0.15) return 'anxious';
+                return 'angry';
+            }
+
+            isAngry() {
+                return Date.now() - this.arrivalTime > this.patience;
+            }
+
+            jump() {
+                this.isJumping = true;
+                this.jumpOffset = 0;
+            }
+
+            update() {
+                this.emotion = this.getEmotion();
+
+                // Blinking
+                this.blinkTimer++;
+                if (this.blinkTimer > 120) {
+                    this.isBlinking = true;
+                    if (this.blinkTimer > 125) {
+                        this.isBlinking = false;
+                        this.blinkTimer = 0;
+                    }
+                }
+
+                if (this.isJumping) {
+                    this.jumpOffset += 1.5;
+                    if (this.jumpOffset > 20) {
+                        this.isJumping = false;
+                        this.jumpOffset = 0;
+                    }
+                }
+
+                if (this.emotion === 'anxious' && animFrame % 20 === 0) {
+                    this.sweatDrops.push({
+                        x: this.x + 70,
+                        y: this.y + 45,
+                        vy: 2,
+                        life: 30
+                    });
+                }
+
+                if (this.emotion === 'angry' && animFrame % 5 === 0) {
+                    this.steamParticles.push({
+                        x: this.x + 35 + Math.random() * 10,
+                        y: this.y + 25,
+                        vy: -1.5,
+                        vx: -0.5,
+                        life: 20
+                    });
+                    this.steamParticles.push({
+                        x: this.x + 65 + Math.random() * 10,
+                        y: this.y + 25,
+                        vy: -1.5,
+                        vx: 0.5,
+                        life: 20
+                    });
+                }
+
+                this.sweatDrops.forEach(d => {
+                    d.y += d.vy;
+                    d.life--;
+                });
+                this.sweatDrops = this.sweatDrops.filter(d => d.life > 0);
+
+                this.steamParticles.forEach(s => {
+                    s.y += s.vy;
+                    s.x += s.vx;
+                    s.life--;
+                });
+                this.steamParticles = this.steamParticles.filter(s => s.life > 0);
+            }
+
+            draw() {
+                this.bobOffset = Math.sin(animFrame * this.bobSpeed) * 4;
+                const jumpY = this.isJumping ? -Math.abs(Math.sin(this.jumpOffset / 20 * Math.PI) * 35) : 0;
+                const drawY = this.y + this.bobOffset + jumpY;
+
+                // Steam
+                this.steamParticles.forEach(s => {
+                    ctx.fillStyle = `rgba(200, 200, 200, ${s.life / 20})`;
+                    ctx.beginPath();
+                    ctx.arc(s.x, s.y, 7, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+
+                // Shadow
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+                ctx.beginPath();
+                ctx.ellipse(this.x + 55, drawY + 95, 30, 8, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Body (cute rounded rectangle)
+                const bodyGradient = ctx.createLinearGradient(this.x + 35, drawY + 60, this.x + 35, drawY + 100);
+                bodyGradient.addColorStop(0, this.outfit.body);
+                bodyGradient.addColorStop(1, this.outfit.accent);
+                ctx.fillStyle = bodyGradient;
+                ctx.beginPath();
+                ctx.roundRect(this.x + 35, drawY + 60, 40, 35, 15);
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // Head (bigger and rounder - chibi style)
+                const headGradient = ctx.createRadialGradient(
+                    this.x + 55, drawY + 35, 5,
+                    this.x + 55, drawY + 35, 30
+                );
+                headGradient.addColorStop(0, '#FFFFFF');
+                headGradient.addColorStop(0.6, this.outfit.head);
+                headGradient.addColorStop(1, this.outfit.accent);
+
+                ctx.fillStyle = headGradient;
+                ctx.beginPath();
+                ctx.arc(this.x + 55, drawY + 40, 32, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.15)';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // Cute ears
+                ctx.fillStyle = this.outfit.blush;
+                ctx.beginPath();
+                ctx.arc(this.x + 28, drawY + 40, 8, 0, Math.PI * 2);
+                ctx.arc(this.x + 82, drawY + 40, 8, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Big cute eyes
+                const hasFood = stations.counter.burger > 0 && stations.counter.drink > 0;
+
+                if (!this.isBlinking) {
+                    if (hasFood && this.emotion === 'happy') {
+                        // Heart eyes
+                        ctx.fillStyle = '#FF6B9D';
+                        ctx.font = '18px Arial';
+                        ctx.textAlign = 'center';
+                        ctx.fillText('❤', this.x + 43, drawY + 42);
+                        ctx.fillText('❤', this.x + 67, drawY + 42);
+                    } else {
+                        // White of eyes
+                        ctx.fillStyle = '#FFFFFF';
+                        ctx.beginPath();
+                        ctx.arc(this.x + 43, drawY + 37, 8, 0, Math.PI * 2);
+                        ctx.arc(this.x + 67, drawY + 37, 8, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        // Pupils
+                        ctx.fillStyle = '#2C3E50';
+                        ctx.beginPath();
+                        ctx.arc(this.x + 44, drawY + 38, 5, 0, Math.PI * 2);
+                        ctx.arc(this.x + 68, drawY + 38, 5, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        // Eye shine
+                        ctx.fillStyle = '#FFFFFF';
+                        ctx.beginPath();
+                        ctx.arc(this.x + 46, drawY + 36, 2.5, 0, Math.PI * 2);
+                        ctx.arc(this.x + 70, drawY + 36, 2.5, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                } else {
+                    // Blinking (simple lines)
+                    ctx.strokeStyle = '#2C3E50';
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.moveTo(this.x + 35, drawY + 37);
+                    ctx.lineTo(this.x + 51, drawY + 37);
+                    ctx.moveTo(this.x + 59, drawY + 37);
+                    ctx.lineTo(this.x + 75, drawY + 37);
+                    ctx.stroke();
+                }
+
+                // Rosy cheeks
+                ctx.fillStyle = this.outfit.blush;
+                ctx.globalAlpha = 0.6;
+                ctx.beginPath();
+                ctx.ellipse(this.x + 33, drawY + 47, 6, 5, 0, 0, Math.PI * 2);
+                ctx.ellipse(this.x + 77, drawY + 47, 6, 5, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+
+                // Eyebrows
+                if (this.emotion === 'impatient' || this.emotion === 'angry' || this.emotion === 'anxious') {
+                    ctx.strokeStyle = '#2C3E50';
+                    ctx.lineWidth = 3;
+                    ctx.lineCap = 'round';
+                    ctx.beginPath();
+                    ctx.moveTo(this.x + 36, drawY + 28);
+                    ctx.lineTo(this.x + 48, drawY + 30);
+                    ctx.moveTo(this.x + 74, drawY + 28);
+                    ctx.lineTo(this.x + 62, drawY + 30);
+                    ctx.stroke();
+                }
+
+                // Mouth
+                ctx.strokeStyle = '#FF6B9D';
+                ctx.lineWidth = 2.5;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                if (this.emotion === 'happy') {
+                    ctx.arc(this.x + 55, drawY + 48, 10, 0.2 * Math.PI, 0.8 * Math.PI);
+                } else if (this.emotion === 'angry') {
+                    ctx.arc(this.x + 55, drawY + 60, 8, 1.2 * Math.PI, 1.8 * Math.PI);
+                } else {
+                    ctx.moveTo(this.x + 47, drawY + 52);
+                    ctx.lineTo(this.x + 63, drawY + 52);
+                }
+                ctx.stroke();
+
+                // Sweat drops
+                this.sweatDrops.forEach(d => {
+                    const sweatGradient = ctx.createRadialGradient(d.x, d.y, 0, d.x, d.y, 4);
+                    sweatGradient.addColorStop(0, `rgba(100, 200, 255, ${d.life / 30})`);
+                    sweatGradient.addColorStop(1, `rgba(100, 200, 255, 0)`);
+                    ctx.fillStyle = sweatGradient;
+                    ctx.beginPath();
+                    ctx.ellipse(d.x, d.y, 4, 6, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+
+                // Order bubble (cuter)
+                ctx.fillStyle = '#FFFFFF';
+                ctx.strokeStyle = '#2C3E50';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.roundRect(this.x + 5, this.y - 35, 100, 40, 10);
+                ctx.fill();
+                ctx.stroke();
+
+                // Little bubble tail
+                ctx.fillStyle = '#FFFFFF';
+                ctx.beginPath();
+                ctx.arc(this.x + 40, this.y, 6, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#2C3E50';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                ctx.font = '24px Arial';
+                ctx.fillStyle = '#2C3E50';
+                ctx.textAlign = 'center';
+                ctx.fillText('🍔 🍹', this.x + 55, this.y - 8);
+
+                // Patience bar (rounded)
+                const elapsed = Date.now() - this.arrivalTime;
+                const remaining = Math.max(0, this.patience - elapsed);
+                const barWidth = (remaining / this.patience) * 100;
+
+                // Bar background
+                ctx.fillStyle = '#E0E0E0';
+                ctx.beginPath();
+                ctx.roundRect(this.x + 5, this.y + 115, 100, 10, 5);
+                ctx.fill();
+
+                // Bar fill
+                ctx.fillStyle = this.getPatienceColor();
+                ctx.beginPath();
+                ctx.roundRect(this.x + 5, this.y + 115, barWidth, 10, 5);
+                ctx.fill();
+
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.roundRect(this.x + 5, this.y + 115, 100, 10, 5);
+                ctx.stroke();
+
+                ctx.textAlign = 'left';
+            }
+        }
+
+        function drawCheckeredFloor() {
+            const tileSize = 40;
+            for (let row = 10; row < 15; row++) {
+                for (let col = 0; col < 20; col++) {
+                    const isRed = (row + col) % 2 === 0;
+                    const gradient = ctx.createLinearGradient(
+                        col * tileSize, row * tileSize,
+                        col * tileSize + tileSize, row * tileSize + tileSize
+                    );
+                    if (isRed) {
+                        gradient.addColorStop(0, '#FF6B6B');
+                        gradient.addColorStop(1, '#FF5252');
+                    } else {
+                        gradient.addColorStop(0, '#FFFFFF');
+                        gradient.addColorStop(1, '#F5F5F5');
+                    }
+                    ctx.fillStyle = gradient;
+                    ctx.fillRect(col * tileSize, row * tileSize, tileSize, tileSize);
+                }
+            }
+        }
+
+        function drawWallpaper() {
+            const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+            gradient.addColorStop(0, '#A67C52');
+            gradient.addColorStop(1, '#8B6239');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 800, 400);
+
+            ctx.strokeStyle = 'rgba(101, 67, 33, 0.3)';
+            ctx.lineWidth = 3;
+            for (let i = 0; i < 800; i += 80) {
+                ctx.beginPath();
+                ctx.moveTo(i, 0);
+                ctx.lineTo(i, 400);
+                ctx.stroke();
+            }
+        }
+
+        function drawNeonSign() {
+            if (animFrame % 60 === 0) {
+                neonBlink = !neonBlink;
+            }
+
+            const alpha = neonBlink ? 1 : 0.3;
+
+            ctx.save();
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = '#FF6BCB';
+            ctx.strokeStyle = '#FFD93D';
+            ctx.lineWidth = 5;
+            ctx.font = 'bold 32px Arial';
+            ctx.textAlign = 'center';
+
+            ctx.shadowColor = '#FF6BCB';
+            ctx.shadowBlur = neonBlink ? 25 : 5;
+            ctx.strokeText('OPEN', 700, 50);
+            ctx.fillText('OPEN', 700, 50);
+            ctx.shadowBlur = 0;
+            ctx.restore();
+        }
+
+        function drawJukebox() {
+            const jx = 680, jy = 300;
+            jukeboxRotation += 0.05;
+
+            // Main body (gradient)
+            const bodyGradient = ctx.createLinearGradient(jx, jy, jx, jy + 80);
+            bodyGradient.addColorStop(0, '#FF6B6B');
+            bodyGradient.addColorStop(1, '#FF5252');
+            ctx.fillStyle = bodyGradient;
+            ctx.beginPath();
+            ctx.roundRect(jx, jy, 100, 80, 10);
+            ctx.fill();
+
+            ctx.strokeStyle = '#FFD93D';
+            ctx.lineWidth = 4;
+            ctx.stroke();
+
+            // Dome
+            const domeGradient = ctx.createRadialGradient(jx + 50, jy - 10, 10, jx + 50, jy, 40);
+            domeGradient.addColorStop(0, '#FFF4D4');
+            domeGradient.addColorStop(1, '#FFD93D');
+            ctx.fillStyle = domeGradient;
+            ctx.beginPath();
+            ctx.arc(jx + 50, jy, 40, Math.PI, 0);
+            ctx.fill();
+            ctx.strokeStyle = '#FFD93D';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+
+            // Spinning record
+            ctx.save();
+            ctx.translate(jx + 50, jy + 40);
+            ctx.rotate(jukeboxRotation);
+
+            const recordGradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 15);
+            recordGradient.addColorStop(0, '#000');
+            recordGradient.addColorStop(1, '#333');
+            ctx.fillStyle = recordGradient;
+            ctx.beginPath();
+            ctx.arc(0, 0, 15, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = '#FFD93D';
+            ctx.beginPath();
+            ctx.arc(0, 0, 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
+
+            ctx.fillStyle = '#FFD93D';
+            ctx.font = 'bold 12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('♪♪', jx + 50, jy + 70);
+        }
+
+        function drawPosters() {
+            // Cute poster
+            const posterGradient = ctx.createLinearGradient(20, 50, 20, 150);
+            posterGradient.addColorStop(0, '#FFE5A0');
+            posterGradient.addColorStop(1, '#FFD93D');
+            ctx.fillStyle = posterGradient;
+            ctx.beginPath();
+            ctx.roundRect(20, 50, 80, 100, 8);
+            ctx.fill();
+
+            ctx.strokeStyle = '#FF6B6B';
+            ctx.lineWidth = 4;
+            ctx.stroke();
+
+            ctx.fillStyle = '#FF6B6B';
+            ctx.font = 'bold 16px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('BURGER', 60, 80);
+            ctx.fillText('SPECIAL', 60, 100);
+            ctx.font = 'bold 20px Arial';
+            ctx.fillText('$1.99', 60, 125);
+        }
+
+        function drawBackground() {
+            drawWallpaper();
+            drawCheckeredFloor();
+            drawNeonSign();
+            drawJukebox();
+            drawPosters();
+        }
+
+        function spawnCustomer() {
+            if (customers.length < 4 && !game.gameOver) {
+                customers.push(new Customer(nextCustomerId++));
+            }
+        }
+
+        function updateGame() {
+            const now = Date.now();
+            animFrame++;
+
+            if (now - lastServeTime > comboWindow && comboCounter > 0) {
+                comboCounter = 0;
+            }
+
+            if (now - lastCustomerTime > customerInterval) {
+                spawnCustomer();
+                lastCustomerTime = now;
+            }
+
+            // Update grill
+            if (stations.grill.cooking) {
+                const elapsed = now - stations.grill.startTime;
+                const progress = elapsed / stations.grill.cookTime;
+
+                if (progress > 0.5 && !stations.grill.isFlipping && stations.grill.flipProgress === 0) {
+                    stations.grill.isFlipping = true;
+                }
+
+                if (stations.grill.isFlipping) {
+                    stations.grill.flipProgress += 0.2;
+                    if (stations.grill.flipProgress >= 1) {
+                        stations.grill.isFlipping = false;
+                        stations.grill.flipProgress = 1;
+                    }
+                }
+
+                if (animFrame % 5 === 0) {
+                    stations.grill.smokeParticles.push({
+                        x: stations.grill.x + 65 + (Math.random() - 0.5) * 40,
+                        y: stations.grill.y,
+                        life: 30,
+                        vx: (Math.random() - 0.5) * 0.5,
+                        vy: -1.5
+                    });
+                }
+            }
+
+            stations.grill.smokeParticles.forEach(p => {
+                p.y += p.vy;
+                p.x += p.vx;
+                p.life--;
+            });
+            stations.grill.smokeParticles = stations.grill.smokeParticles.filter(p => p.life > 0);
+
+            // Update drink
+            if (stations.drink.cooking) {
+                const elapsed = now - stations.drink.startTime;
+                stations.drink.fillLevel = Math.min(1, elapsed / stations.drink.cookTime);
+
+                if (animFrame % 20 === 0 && stations.drink.iceCubes.length < 3) {
+                    stations.drink.iceCubes.push({
+                        y: stations.drink.y + 10,
+                        targetY: stations.drink.y + 55,
+                        falling: true
+                    });
+                }
+
+                stations.drink.iceCubes.forEach(ice => {
+                    if (ice.falling && ice.y < ice.targetY) {
+                        ice.y += 2;
+                    } else {
+                        ice.falling = false;
+                    }
+                });
+
+                if (animFrame % 8 === 0) {
+                    stations.drink.bubbles.push({
+                        x: stations.drink.x + 65 + (Math.random() - 0.5) * 40,
+                        y: stations.drink.y + 65,
+                        life: 40,
+                        vy: -1
+                    });
+                }
+            }
+
+            stations.drink.bubbles.forEach(p => {
+                p.y += p.vy;
+                p.life--;
+            });
+            stations.drink.bubbles = stations.drink.bubbles.filter(p => p.life > 0);
+
+            for (let key in stations) {
+                const station = stations[key];
+                if (station.cooking && now - station.startTime >= station.cookTime) {
+                    station.cooking = false;
+                    station.ready = true;
+                    station.dingAnimation = 30;
+
+                    particles.push(new Particle(
+                        station.x + 65,
+                        station.y + 20,
+                        'ding',
+                        'DING!'
+                    ));
+
+                    for (let i = 0; i < 8; i++) {
+                        particles.push(new Particle(
+                            station.x + 65 + (Math.random() - 0.5) * 30,
+                            station.y + 40 + (Math.random() - 0.5) * 20,
+                            'sparkle',
+                            '✨'
+                        ));
+                    }
+                }
+
+                if (station.dingAnimation > 0) {
+                    station.dingAnimation--;
+                }
+            }
+
+            customers.forEach(c => c.update());
+            particles.forEach(p => p.update());
+            particles.splice(0, particles.length, ...particles.filter(p => !p.isDead()));
+
+            if (screenShake > 0) {
+                screenShake--;
+            }
+
+            for (let i = customers.length - 1; i >= 0; i--) {
+                if (customers[i].isAngry() && !customers[i].served) {
+                    particles.push(new Particle(
+                        customers[i].x + 55,
+                        customers[i].y + 40,
+                        'angry',
+                        '😠'
+                    ));
+
+                    customers.splice(i, 1);
+                    game.angryCount++;
+                    screenShake = 20;
+                    comboCounter = 0;
+
+                    if (game.angryCount >= game.maxAngry) {
+                        game.gameOver = true;
+                        game.won = false;
+                    }
+                }
+            }
+
+            updateStats();
+        }
+
+        function updateStats() {
+            statsDiv.textContent = `Served: ${game.servedCount} / ${game.targetServed} | Angry: ${game.angryCount} / ${game.maxAngry} | Combo: ${comboCounter}`;
+        }
+
+        function drawStation(station) {
+            if (station.ready) {
+                const pulse = Math.sin(animFrame * 0.2) * 0.5 + 0.5;
+                ctx.shadowColor = '#FFD93D';
+                ctx.shadowBlur = 25 * pulse;
+            }
+
+            const gradient = ctx.createLinearGradient(station.x, station.y, station.x, station.y + station.height);
+            gradient.addColorStop(0, station.color);
+            gradient.addColorStop(0.5, '#FFFFFF');
+            gradient.addColorStop(1, station.color);
+
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.roundRect(station.x, station.y, station.width, station.height, 15);
+            ctx.fill();
+
+            ctx.shadowBlur = 0;
+
+            if (station.ready) {
+                const pulse = Math.sin(animFrame * 0.2) * 0.5 + 0.5;
+                ctx.strokeStyle = station.accentColor;
+                ctx.lineWidth = 6;
+                ctx.globalAlpha = pulse;
+                ctx.beginPath();
+                ctx.roundRect(station.x - 3, station.y - 3, station.width + 6, station.height + 6, 18);
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+            }
+
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.roundRect(station.x, station.y, station.width, station.height, 15);
+            ctx.stroke();
+
+            ctx.fillStyle = '#2C3E50';
+            ctx.font = 'bold 18px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(station.label, station.x + station.width/2, station.y + 22);
+
+            // Smoke
+            if (station.smokeParticles) {
+                station.smokeParticles.forEach(p => {
+                    const smokeGradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 6);
+                    smokeGradient.addColorStop(0, `rgba(150, 150, 150, ${p.life / 30})`);
+                    smokeGradient.addColorStop(1, `rgba(150, 150, 150, 0)`);
+                    ctx.fillStyle = smokeGradient;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+            }
+
+            // Bubbles
+            if (station.bubbles) {
+                station.bubbles.forEach(p => {
+                    const bubbleGradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 5);
+                    bubbleGradient.addColorStop(0, `rgba(255, 255, 255, ${p.life / 40})`);
+                    bubbleGradient.addColorStop(1, `rgba(100, 200, 255, ${p.life / 40 * 0.5})`);
+                    ctx.fillStyle = bubbleGradient;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+            }
+
+            if (station.cooking) {
+                const elapsed = Date.now() - station.startTime;
+                const progress = Math.min(1, elapsed / station.cookTime);
+
+                if (station.item === 'burger') {
+                    const centerX = station.x + station.width / 2;
+                    const centerY = station.y + 60;
+                    const flipAngle = station.flipProgress * Math.PI;
+
+                    ctx.save();
+                    ctx.translate(centerX, centerY);
+                    ctx.rotate(flipAngle);
+                    ctx.scale(1, Math.cos(flipAngle));
+                    drawBurger(0, -10, 1);
+                    ctx.restore();
+                } else if (station.item === 'drink') {
+                    const glassX = station.x + station.width / 2;
+                    const glassY = station.y + 50;
+
+                    // Glass outline
+                    ctx.strokeStyle = '#2C3E50';
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.moveTo(glassX - 12, glassY);
+                    ctx.lineTo(glassX - 10, glassY + 25);
+                    ctx.lineTo(glassX + 10, glassY + 25);
+                    ctx.lineTo(glassX + 12, glassY);
+                    ctx.closePath();
+                    ctx.stroke();
+
+                    // Liquid
+                    const fillHeight = 23 * station.fillLevel;
+                    const liquidGradient = ctx.createLinearGradient(
+                        glassX, glassY + 25 - fillHeight,
+                        glassX, glassY + 25
+                    );
+                    liquidGradient.addColorStop(0, '#FF8C94');
+                    liquidGradient.addColorStop(1, '#FF6B6B');
+                    ctx.fillStyle = liquidGradient;
+                    ctx.beginPath();
+                    ctx.moveTo(glassX - 10 + 2 * (1 - station.fillLevel), glassY + 25 - fillHeight);
+                    ctx.lineTo(glassX - 10, glassY + 25);
+                    ctx.lineTo(glassX + 10, glassY + 25);
+                    ctx.lineTo(glassX + 10 - 2 * (1 - station.fillLevel), glassY + 25 - fillHeight);
+                    ctx.closePath();
+                    ctx.fill();
+
+                    // Ice cubes
+                    station.iceCubes.forEach(ice => {
+                        const iceGradient = ctx.createLinearGradient(
+                            glassX - 5, ice.y,
+                            glassX + 5, ice.y + 7
+                        );
+                        iceGradient.addColorStop(0, 'rgba(200, 240, 255, 0.9)');
+                        iceGradient.addColorStop(1, 'rgba(150, 220, 255, 0.7)');
+                        ctx.fillStyle = iceGradient;
+                        ctx.beginPath();
+                        ctx.roundRect(glassX - 5, ice.y, 7, 7, 2);
+                        ctx.fill();
+                    });
+                }
+            } else if (station.ready) {
+                const bounce = Math.abs(Math.sin(animFrame * 0.15)) * 8;
+
+                if (station.item === 'burger') {
+                    drawBurger(station.x + station.width/2, station.y + 52 - bounce, 1.3);
+                } else if (station.item === 'drink') {
+                    drawDrink(station.x + station.width/2, station.y + 47 - bounce, 1.3);
+                }
+
+                ctx.fillStyle = '#6BCB77';
+                ctx.font = 'bold 14px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('✨ Click! ✨', station.x + station.width/2, station.y + 82);
+            }
+        }
+
+        function drawBurger(x, y, scale = 1) {
+            const s = scale;
+
+            // Shadow
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+            ctx.beginPath();
+            ctx.ellipse(x, y + 22 * s, 18 * s, 4 * s, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Top bun with gradient
+            const topBunGradient = ctx.createRadialGradient(x, y - 2 * s, 2 * s, x, y + 2 * s, 18 * s);
+            topBunGradient.addColorStop(0, '#F4C430');
+            topBunGradient.addColorStop(1, '#D2691E');
+            ctx.fillStyle = topBunGradient;
+            ctx.beginPath();
+            ctx.ellipse(x, y + 2 * s, 17 * s, 10 * s, 0, Math.PI, 0, true);
+            ctx.fill();
+
+            // Outline
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+
+            // Sesame seeds (more visible)
+            ctx.fillStyle = '#FFF8DC';
+            for (let i = 0; i < 5; i++) {
+                ctx.beginPath();
+                ctx.arc(x - 10 * s + i * 5 * s, y + 3 * s, 2 * s, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+                ctx.lineWidth = 0.5;
+                ctx.stroke();
+            }
+
+            // Lettuce (wavy)
+            ctx.fillStyle = '#90EE90';
+            ctx.beginPath();
+            ctx.roundRect(x - 16 * s, y + 4 * s, 32 * s, 4 * s, 2 * s);
+            ctx.fill();
+
+            // Patty with gradient
+            const pattyGradient = ctx.createLinearGradient(x, y + 8 * s, x, y + 15 * s);
+            pattyGradient.addColorStop(0, '#8B4513');
+            pattyGradient.addColorStop(1, '#654321');
+            ctx.fillStyle = pattyGradient;
+            ctx.beginPath();
+            ctx.roundRect(x - 17 * s, y + 8 * s, 34 * s, 7 * s, 2 * s);
+            ctx.fill();
+
+            // Cheese
+            const cheeseGradient = ctx.createLinearGradient(x, y + 13 * s, x, y + 16 * s);
+            cheeseGradient.addColorStop(0, '#FFD700');
+            cheeseGradient.addColorStop(1, '#FFA500');
+            ctx.fillStyle = cheeseGradient;
+            ctx.beginPath();
+            ctx.roundRect(x - 15 * s, y + 13 * s, 30 * s, 3 * s, 1 * s);
+            ctx.fill();
+
+            // Bottom bun
+            const bottomBunGradient = ctx.createLinearGradient(x, y + 16 * s, x, y + 22 * s);
+            bottomBunGradient.addColorStop(0, '#DAA520');
+            bottomBunGradient.addColorStop(1, '#B8860B');
+            ctx.fillStyle = bottomBunGradient;
+            ctx.beginPath();
+            ctx.roundRect(x - 16 * s, y + 16 * s, 32 * s, 6 * s, 3 * s);
+            ctx.fill();
+        }
+
+        function drawDrink(x, y, scale = 1) {
+            const s = scale;
+
+            // Shadow
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+            ctx.beginPath();
+            ctx.ellipse(x, y + 24 * s, 10 * s, 3 * s, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Glass with gradient
+            const glassGradient = ctx.createLinearGradient(x - 10 * s, y, x + 10 * s, y + 22 * s);
+            glassGradient.addColorStop(0, 'rgba(200, 240, 255, 0.4)');
+            glassGradient.addColorStop(1, 'rgba(150, 220, 255, 0.3)');
+            ctx.fillStyle = glassGradient;
+            ctx.strokeStyle = '#2C3E50';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.moveTo(x - 10 * s, y);
+            ctx.lineTo(x - 8 * s, y + 22 * s);
+            ctx.lineTo(x + 8 * s, y + 22 * s);
+            ctx.lineTo(x + 10 * s, y);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+
+            // Liquid with gradient
+            const liquidGradient = ctx.createLinearGradient(x, y + 5 * s, x, y + 22 * s);
+            liquidGradient.addColorStop(0, '#FF8C94');
+            liquidGradient.addColorStop(1, '#FF6B6B');
+            ctx.fillStyle = liquidGradient;
+            ctx.beginPath();
+            ctx.moveTo(x - 9 * s, y + 5 * s);
+            ctx.lineTo(x - 8 * s, y + 22 * s);
+            ctx.lineTo(x + 8 * s, y + 22 * s);
+            ctx.lineTo(x + 9 * s, y + 5 * s);
+            ctx.closePath();
+            ctx.fill();
+
+            // Ice cubes with shine
+            ctx.fillStyle = 'rgba(220, 245, 255, 0.9)';
+            ctx.beginPath();
+            ctx.roundRect(x - 4 * s, y + 8 * s, 6 * s, 6 * s, 1 * s);
+            ctx.roundRect(x + 2 * s, y + 14 * s, 5 * s, 5 * s, 1 * s);
+            ctx.fill();
+
+            ctx.strokeStyle = 'rgba(100, 180, 220, 0.6)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // Ice highlights
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.fillRect(x - 3 * s, y + 9 * s, 2 * s, 2 * s);
+            ctx.fillRect(x + 3 * s, y + 15 * s, 2 * s, 2 * s);
+
+            // Straw
+            ctx.strokeStyle = '#FF6B6B';
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(x + 4 * s, y - 6 * s);
+            ctx.lineTo(x + 4 * s, y + 18 * s);
+            ctx.stroke();
+
+            // Straw bend
+            ctx.beginPath();
+            ctx.moveTo(x + 4 * s, y - 6 * s);
+            ctx.lineTo(x + 10 * s, y - 10 * s);
+            ctx.stroke();
+        }
+
+        function drawCounter() {
+            const station = stations.counter;
+
+            const gradient = ctx.createLinearGradient(station.x, station.y, station.x, station.y + station.height);
+            gradient.addColorStop(0, '#FFFFFF');
+            gradient.addColorStop(0.3, '#F5F5F5');
+            gradient.addColorStop(0.7, '#E8E8E8');
+            gradient.addColorStop(1, '#D0D0D0');
+
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.roundRect(station.x, station.y, station.width, station.height, 15);
+            ctx.fill();
+
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+
+            // Inner shine
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.roundRect(station.x + 8, station.y + 8, station.width - 16, station.height - 16, 10);
+            ctx.stroke();
+
+            ctx.fillStyle = '#2C3E50';
+            ctx.font = 'bold 18px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(station.label, station.x + station.width/2, station.y + 24);
+
+            const burgerStartX = station.x + 60;
+            const drinkStartX = station.x + 160;
+
+            // Stacked burgers
+            for (let i = 0; i < Math.min(station.burger, 3); i++) {
+                drawBurger(burgerStartX, station.y + 72 - i * 10, 0.9);
+            }
+            if (station.burger > 0) {
+                ctx.fillStyle = '#2C3E50';
+                ctx.font = 'bold 16px Arial';
+                ctx.fillText(`×${station.burger}`, burgerStartX + 30, station.y + 58);
+            }
+
+            // Stacked drinks
+            for (let i = 0; i < Math.min(station.drink, 3); i++) {
+                drawDrink(drinkStartX, station.y + 67 - i * 10, 0.9);
+            }
+            if (station.drink > 0) {
+                ctx.fillStyle = '#2C3E50';
+                ctx.font = 'bold 16px Arial';
+                ctx.fillText(`×${station.drink}`, drinkStartX + 30, station.y + 58);
+            }
+        }
+
+        function draw() {
+            ctx.save();
+
+            if (screenShake > 0) {
+                ctx.translate(
+                    (Math.random() - 0.5) * screenShake * 0.5,
+                    (Math.random() - 0.5) * screenShake * 0.5
+                );
+            }
+
+            ctx.clearRect(-50, -50, canvas.width + 100, canvas.height + 100);
+
+            drawBackground();
+            customers.forEach(customer => customer.draw());
+            drawStation(stations.grill);
+            drawStation(stations.drink);
+            drawCounter();
+            particles.forEach(p => p.draw());
+
+            if (game.gameOver) {
+                ctx.fillStyle = 'rgba(44, 62, 80, 0.85)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                ctx.fillStyle = '#FFD93D';
+                ctx.strokeStyle = '#FF6B6B';
+                ctx.lineWidth = 6;
+                ctx.font = 'bold 56px Arial';
+                ctx.textAlign = 'center';
+
+                if (game.won) {
+                    ctx.strokeText('🎉 YOU WIN! 🎉', canvas.width/2, canvas.height/2 - 20);
+                    ctx.fillText('🎉 YOU WIN! 🎉', canvas.width/2, canvas.height/2 - 20);
+
+                    // SOLD OUT sign
+                    const signGradient = ctx.createLinearGradient(
+                        canvas.width/2 - 120, canvas.height/2 + 20,
+                        canvas.width/2 + 120, canvas.height/2 + 80
+                    );
+                    signGradient.addColorStop(0, '#FF6B6B');
+                    signGradient.addColorStop(1, '#FF5252');
+                    ctx.fillStyle = signGradient;
+                    ctx.beginPath();
+                    ctx.roundRect(canvas.width/2 - 120, canvas.height/2 + 20, 240, 60, 10);
+                    ctx.fill();
+
+                    ctx.strokeStyle = '#FFD93D';
+                    ctx.lineWidth = 5;
+                    ctx.stroke();
+
+                    ctx.fillStyle = '#FFF';
+                    ctx.font = 'bold 36px Arial';
+                    ctx.fillText('SOLD OUT!', canvas.width/2, canvas.height/2 + 62);
+                } else {
+                    ctx.strokeText('😞 GAME OVER 😞', canvas.width/2, canvas.height/2 - 20);
+                    ctx.fillText('😞 GAME OVER 😞', canvas.width/2, canvas.height/2 - 20);
+                }
+
+                ctx.font = '28px Arial';
+                ctx.fillStyle = '#FFF';
+                ctx.fillText('Refresh to play again', canvas.width/2, canvas.height/2 + 120);
+            }
+
+            ctx.restore();
+            ctx.textAlign = 'left';
+        }
+
+        function handleClick(e) {
+            if (game.gameOver) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            if (x >= stations.grill.x && x <= stations.grill.x + stations.grill.width &&
+                y >= stations.grill.y && y <= stations.grill.y + stations.grill.height) {
+                if (!stations.grill.cooking && !stations.grill.ready) {
+                    stations.grill.cooking = true;
+                    stations.grill.startTime = Date.now();
+                    stations.grill.flipProgress = 0;
+                    stations.grill.isFlipping = false;
+                } else if (stations.grill.ready) {
+                    stations.counter.burger++;
+                    stations.grill.ready = false;
+                    stations.grill.flipProgress = 0;
+                }
+            }
+
+            if (x >= stations.drink.x && x <= stations.drink.x + stations.drink.width &&
+                y >= stations.drink.y && y <= stations.drink.y + stations.drink.height) {
+                if (!stations.drink.cooking && !stations.drink.ready) {
+                    stations.drink.cooking = true;
+                    stations.drink.startTime = Date.now();
+                    stations.drink.fillLevel = 0;
+                    stations.drink.iceCubes = [];
+                } else if (stations.drink.ready) {
+                    stations.counter.drink++;
+                    stations.drink.ready = false;
+                    stations.drink.fillLevel = 0;
+                    stations.drink.iceCubes = [];
+                }
+            }
+
+            customers.forEach((customer, index) => {
+                if (x >= customer.x && x <= customer.x + customer.width &&
+                    y >= customer.y && y <= customer.y + customer.height) {
+
+                    if (stations.counter.burger >= customer.order.burger &&
+                        stations.counter.drink >= customer.order.drink) {
+
+                        for (let i = 0; i < 6; i++) {
+                            particles.push(new Particle(
+                                customer.x + 55 + (Math.random() - 0.5) * 25,
+                                customer.y + 55,
+                                'heart',
+                                '❤️'
+                            ));
+                        }
+
+                        particles.push(new Particle(
+                            customer.x + 55,
+                            customer.y + 35,
+                            'money',
+                            '+$5'
+                        ));
+
+                        const now = Date.now();
+                        if (now - lastServeTime < comboWindow) {
+                            comboCounter++;
+                            if (comboCounter >= 3) {
+                                particles.push(new Particle(
+                                    canvas.width / 2,
+                                    200,
+                                    'combo',
+                                    comboCounter === 3 ? 'GREAT!' : `AMAZING! x${comboCounter}`
+                                ));
+                            }
+                        } else {
+                            comboCounter = 1;
+                        }
+                        lastServeTime = now;
+
+                        customer.jump();
+
+                        setTimeout(() => {
+                            stations.counter.burger -= customer.order.burger;
+                            stations.counter.drink -= customer.order.drink;
+                            customers.splice(index, 1);
+                            game.servedCount++;
+
+                            if (game.servedCount >= game.targetServed) {
+                                game.gameOver = true;
+                                game.won = true;
+                            }
+                        }, 300);
+                    }
+                }
+            });
+        }
+
+        canvas.addEventListener('click', handleClick);
+
+        function gameLoop() {
+            updateGame();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        spawnCustomer();
+        lastCustomerTime = Date.now();
+        gameLoop();
+    </script>
+</body>
+</html>

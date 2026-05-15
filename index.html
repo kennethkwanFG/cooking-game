@@ -2,61 +2,141 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>Cooking Fever - 60s Diner</title>
     <style>
-        body {
+        * {
+            -webkit-tap-highlight-color: transparent;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        html, body {
             margin: 0;
-            padding: 20px;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            position: fixed;
+        }
+
+        body {
             font-family: 'Courier New', monospace;
             background: linear-gradient(180deg, #2C1810 0%, #1a0f0a 100%);
             display: flex;
             flex-direction: column;
             align-items: center;
+            justify-content: flex-start;
+            padding: 10px;
+            box-sizing: border-box;
         }
+
         h1 {
             color: #FF4444;
-            text-shadow: 3px 3px 0px #FFD700, 5px 5px 10px #000;
-            font-size: 42px;
-            letter-spacing: 3px;
+            text-shadow: 2px 2px 0px #FFD700, 3px 3px 8px #000;
+            font-size: clamp(20px, 5vw, 42px);
+            letter-spacing: 2px;
+            margin: 5px 0;
         }
+
+        #gameContainer {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
         #gameCanvas {
-            border: 8px solid #FFD700;
+            border: 4px solid #FFD700;
             background: #fff;
             cursor: pointer;
-            box-shadow: 0 0 30px rgba(255, 215, 0, 0.6);
-            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(255, 215, 0, 0.6);
+            border-radius: 8px;
+            max-width: 100%;
+            height: auto;
+            display: block;
+            touch-action: none;
         }
+
         #stats {
-            margin-top: 15px;
-            font-size: 22px;
+            margin-top: 8px;
+            font-size: clamp(14px, 3vw, 22px);
             font-weight: bold;
             color: #FFD700;
             background: #FF4444;
-            padding: 12px 25px;
+            padding: 8px 15px;
             border-radius: 8px;
             box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-            border: 3px solid #FFD700;
+            border: 2px solid #FFD700;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
+
         #instructions {
-            margin-top: 15px;
-            max-width: 650px;
+            margin-top: 8px;
+            max-width: 100%;
             text-align: center;
             color: #FFD700;
             background: rgba(255, 68, 68, 0.4);
-            padding: 18px;
-            border-radius: 12px;
+            padding: 10px;
+            border-radius: 8px;
             border: 2px solid #FFD700;
+            font-size: clamp(11px, 2.5vw, 16px);
+        }
+
+        @media (max-width: 600px) {
+            body {
+                padding: 5px;
+            }
+
+            h1 {
+                font-size: clamp(18px, 4vw, 28px);
+                margin: 3px 0;
+            }
+
+            #gameCanvas {
+                border: 3px solid #FFD700;
+                border-radius: 6px;
+            }
+
+            #stats {
+                font-size: clamp(12px, 2.8vw, 18px);
+                padding: 6px 12px;
+            }
+
+            #instructions {
+                font-size: clamp(10px, 2.2vw, 14px);
+                padding: 8px;
+            }
         }
     </style>
 </head>
 <body>
     <h1>🍔 60s DINER RUSH 🍹</h1>
-    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+    </div>
     <div id="stats">Served: 0 / 5 | Angry: 0 / 3 | Combo: 0</div>
     <div id="instructions">
-        <p><strong>How to Play:</strong> Click GRILL to cook burgers (3s) → Click SODA to make drinks (3s) → Click CUSTOMER to serve when ready!</p>
+        <p><strong>How to Play:</strong> Tap GRILL to cook burgers (3s) → Tap SODA to make drinks (3s) → Tap CUSTOMER to serve when ready!</p>
     </div>
+
+    <script>
+        // Prevent pull-to-refresh and other touch behaviors
+        document.body.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+        }, { passive: false });
+
+        document.body.addEventListener('gesturestart', (e) => {
+            e.preventDefault();
+        });
+    </script>
 
     <script>
         const canvas = document.getElementById('gameCanvas');
@@ -1202,9 +1282,27 @@
         function handleClick(e) {
             if (game.gameOver) return;
 
+            e.preventDefault();
+
+            // Handle both mouse and touch events
+            let clientX, clientY;
+            if (e.type.startsWith('touch')) {
+                if (e.touches.length === 0) return;
+                clientX = e.touches[0].clientX;
+                clientY = e.touches[0].clientY;
+            } else {
+                clientX = e.clientX;
+                clientY = e.clientY;
+            }
+
             const rect = canvas.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
+
+            // Scale coordinates from display size to canvas size
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+
+            const x = (clientX - rect.left) * scaleX;
+            const y = (clientY - rect.top) * scaleY;
 
             if (x >= stations.grill.x && x <= stations.grill.x + stations.grill.width &&
                 y >= stations.grill.y && y <= stations.grill.y + stations.grill.height) {
@@ -1292,7 +1390,9 @@
             });
         }
 
+        // Add both mouse and touch event listeners
         canvas.addEventListener('click', handleClick);
+        canvas.addEventListener('touchstart', handleClick, { passive: false });
 
         function gameLoop() {
             updateGame();
